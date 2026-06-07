@@ -104,3 +104,45 @@ def angle_difference_calc(dir_user_list, dir_poi_list):
 def geofence_inside_outside_determination(center_lat, center_lon, radius, lat, lon):
     distance = geodesic((center_lat, center_lon), (lat, lon)).meters
     return distance <= float(radius)
+
+
+
+# F1、Temporal IoUの計算
+def calculate_timeline_metrics(prediction_data, ground_truth_timeline):
+    tp = 0
+    fp = 0
+    fn = 0
+    
+    min_len = min(len(prediction_data), len(ground_truth_timeline))
+    
+    for idx in range(min_len):
+        d = prediction_data[idx]
+        is_predicted_in = (d["status"][0] == "inside" and d["status"][1] == "flame_in")
+        is_ground_truth_in = bool(ground_truth_timeline[idx])
+        
+        if is_predicted_in and is_ground_truth_in:
+            tp += 1
+        elif is_predicted_in and not is_ground_truth_in:
+            fp += 1
+        elif not is_predicted_in and is_ground_truth_in:
+            fn += 1
+    
+
+            
+    precision = tp / (tp + fp) if (tp + fp) > 0 else 0.0
+    recall = tp / (tp + fn) if (tp + fn) > 0 else 0.0
+    f1_score = 2 * (precision * recall) / (precision + recall) if (precision + recall) > 0 else 0.0
+    
+    intersection = tp
+    union = tp + fp + fn
+    iou = intersection / union if union > 0 else 0.0
+    
+    return {
+        "F1_Score": f1_score,
+        "Temporal_IoU": iou,
+        "Precision": precision,
+        "Recall": recall,
+        "TP": tp,
+        "FP": fp,
+        "FN": fn
+    }

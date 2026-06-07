@@ -8,6 +8,7 @@ import data_storage as ds
 from itertools import chain
 import graph
 import pprint
+import plotly.express as px
 
 
 
@@ -47,7 +48,7 @@ if selected_mode == "ヒートマップ":
 
 # Temporal IoUモード
 elif selected_mode == "Temporal IoU":
-    selected_person = st.selectbox("撮影者", person)
+    selected_person = st.selectbox("撮影者", person + ["全て"])
     target_id = 0
     selected_attention_poi = "全て"
     selected_radius_setting = st.selectbox("ジオフェンス半径", ["一律", "個別"])
@@ -161,7 +162,7 @@ if selected_mode == "グラフ":
 
         #折れ線グラフの作成
         for difference in direction_difference_list:
-            graph.create_line_graph(difference, poi_name_list)
+            graph.create_line_graph(difference, poi_name_list, unique_key=f"graph_mode_line_{i}")
 
 
 
@@ -202,129 +203,224 @@ if selected_mode == "ヒートマップ":
 
         
 
-
-
-
-
-
-
 # Temporal IoUモード
 if selected_mode == "Temporal IoU":
-    # gpsデータ分解
-    location = gps_data["location"]
-    lat_list, lon_list, _, _, _, time_list, path_not_color_list = ds.locations_storage(location, selected_mode)
-    # 方向データ分解
-    heading = heading_data["direction"]
-    _, division_heading_list, poi_id_list = ds.headings_storage(heading, time_list)
-    direction_difference_list, _ = ds.difference_direction_between_user_and_poi(path_not_color_list, division_heading_list, poi_id_list, poi_lat_list, poi_lon_list, "list")
-
-    # 移動座標をpoiごとに区分け
-    lat_iter = iter(lat_list)
-    lon_iter = iter(lon_list)
-    division_lat_list = [[next(lat_iter) for _ in sub_list] for sub_list in division_heading_list]
-    division_lon_list = [[next(lon_iter) for _ in sub_list] for sub_list in division_heading_list]
-    _, view_lat_list, view_lon_list = ds.extend_line(division_lat_list, division_lon_list, division_heading_list, poi_id_list)
-
-    # 事前に設定したpoiのみの座標にするため、上書き
-    lat_list = []
-    lon_list = []
-
-    # データ階層を保持したまま事前に設定したpoiのデータのみ保存
-    not_filtered_heading_list = []
-    not_filtered_lat_list = []
-    not_filtered_lon_list = []
-    filtered_poi_list = []
-
-    # ジオフェンスの内外判定を実行、結果を格納
-    geofence_inside_outside_mask = []
-
-    for inner_lat_list, inner_lon_list, inner_heading_list, poi_id in zip(division_lat_list, division_lon_list, division_heading_list, poi_id_list):
-        if poi_id < 6:  # 今のところ、事前に設定したpoi以外はスキップ
-            center_lat, center_lon = poi_lat_list[poi_id], poi_lon_list[poi_id]
-            if selected_radius_setting == "一律":
-                radius = all_radius
-            elif selected_radius_setting == "個別":
-                radius = input_radius[poi_id]
-
-            results = []
+    
+    if selected_person == "全て":
+        st.caption("POIごとの平均スコア")
+        
+        poi_scores = {poi_id: {p: {"f1": [], "iou": [], "prec": [], "rec": []} for p in person} for poi_id in range(6)}
+        
+        for gps_data, heading_data, name in zip(gps_data_list, heading_data_list, person):
+            location = gps_data["location"]
+            lat_list, lon_list, _, _, _, time_list, path_not_color_list = ds.locations_storage(location, selected_mode)
+            heading = heading_data["direction"]
+            _, division_heading_list, poi_id_list = ds.headings_storage(heading, time_list)
             
-            # ジオフェンスの判定に限らず格納
-            not_filtered_inner_heading_list = []
-            not_filtered_inner_lat_list = []
-            not_filtered_inner_lon_list = []
+            lat_iter = iter(lat_list)
+            lon_iter = iter(lon_list)
+            division_lat_list = [[next(lat_iter) for _ in sub_list] for sub_list in division_heading_list]
+            division_lon_list = [[next(lon_iter) for _ in sub_list] for sub_list in division_heading_list]
 
-            for lon, lat, heading in zip(inner_lon_list, inner_lat_list, inner_heading_list):
-                is_inside = calc.geofence_inside_outside_determination(center_lat, center_lon, radius, lat, lon)
-                results.append(is_inside)
+            geofence_inside_outside_mask = []
+            not_filtered_heading_list = []
+            not_filtered_lat_list = []
+            not_filtered_lon_list = []
+            filtered_poi_list = []
+
+            for inner_lat_list, inner_lon_list, inner_heading_list, poi_id in zip(division_lat_list, division_lon_list, division_heading_list, poi_id_list):
+                if poi_id < 6:
+                    center_lat, center_lon = poi_lat_list[poi_id], poi_lon_list[poi_id]
+                    radius = all_radius if selected_radius_setting == "一律" else input_radius[poi_id]
+                    
+                    results = []
+                    for lon, lat in zip(inner_lon_list, inner_lat_list):
+                        is_inside = calc.geofence_inside_outside_determination(center_lat, center_lon, radius, lat, lon)
+                        results.append(is_inside)
+                    
+                    geofence_inside_outside_mask.append(results)
+                    not_filtered_heading_list.append(inner_heading_list)
+                    not_filtered_lat_list.append(inner_lat_list)
+                    not_filtered_lon_list.append(inner_lon_list)
+                    filtered_poi_list.append(poi_id)
+
+            not_filtered_direction_difference = []
+            for lat, lon, heading, poi_id in zip(not_filtered_lat_list, not_filtered_lon_list, not_filtered_heading_list, filtered_poi_list):
+                poi_dir = ds.direction_user_to_poi(lat, lon, poi_lat_list[poi_id], poi_lon_list[poi_id])
+                difference = calc.angle_difference_calc(heading, poi_dir)
+                not_filtered_direction_difference.append(difference)
+            
+            filtered_direction_difference = [
+                [{"value": val, "status": "inside" if is_inside else "outside"} for val, is_inside in zip(sub_data, sub_mask)]
+                for sub_data, sub_mask in zip(not_filtered_direction_difference, geofence_inside_outside_mask)
+            ]
+
+            double_filtered_direction_difference = [
+                [{"value": d["value"], "status": (d["status"], "flame_in" if abs(d["value"]) <= float(selected_threshold) else "flame_out")} for d in sub_list]
+                for sub_list in filtered_direction_difference
+            ]
+
+            with open("data/flame_in_time/" + name + "-flame_in_time.json", "r", encoding="utf-8") as f:
+                timeline_data = json.load(f)
+            flame_in_list = timeline_data["flame_in"]
+
+            for i, (nested_list, poi_id) in enumerate(zip(double_filtered_direction_difference, filtered_poi_list)):
+                current_flame_timeline = flame_in_list[i]["flame_in"]
+                metrics = calc.calculate_timeline_metrics(nested_list, current_flame_timeline)
                 
-                lat_list.append(lat)
-                lon_list.append(lon)   
-                not_filtered_inner_heading_list.append(heading) 
-                not_filtered_inner_lat_list.append(lat)
-                not_filtered_inner_lon_list.append(lon)  
-                
-             
-            geofence_inside_outside_mask.append(results)
-            not_filtered_heading_list.append(not_filtered_inner_heading_list)
-            not_filtered_lat_list.append(not_filtered_inner_lat_list)
-            not_filtered_lon_list.append(not_filtered_inner_lon_list)
-            filtered_poi_list.append(poi_id)
-    
-    #ジオフェンスの判定によってポイントの色を変更
-    color_list = ds.color_change_by_geofence(geofence_inside_outside_mask)
+                poi_scores[poi_id][name]["f1"].append(metrics["F1_Score"])
+                poi_scores[poi_id][name]["iou"].append(metrics["Temporal_IoU"])
+                poi_scores[poi_id][name]["prec"].append(metrics["Precision"])
+                poi_scores[poi_id][name]["rec"].append(metrics["Recall"])
 
-    # 事前に設定したpoiのみの方向データから、ユーザ方向とpoi方向の角度差を計算
-    not_filtered_direction_difference = []
-    for lat, lon, heading, poi_id in zip(not_filtered_lat_list, not_filtered_lon_list, not_filtered_heading_list, filtered_poi_list):
-        poi_dir = ds.direction_user_to_poi(lat, lon, poi_lat_list[poi_id], poi_lon_list[poi_id])
-        difference = calc.angle_difference_calc(heading, poi_dir)
-        not_filtered_direction_difference.append(difference)
-    
-    # 角度差のリストにジオフェンスの内外判定結果を付与
-    filtered_direction_difference = [
-        [
-            {"value": val, "status": "inside" if is_inside else "outside"}
-            for val, is_inside in zip(sub_data, sub_mask)
+        avg_scores_data = []
+        for poi_id in range(6):
+            person_f1 = [np.mean(poi_scores[poi_id][p]["f1"]) for p in person if poi_scores[poi_id][p]["f1"]]
+            person_iou = [np.mean(poi_scores[poi_id][p]["iou"]) for p in person if poi_scores[poi_id][p]["iou"]]
+            person_prec = [np.mean(poi_scores[poi_id][p]["prec"]) for p in person if poi_scores[poi_id][p]["prec"]]
+            person_rec = [np.mean(poi_scores[poi_id][p]["rec"]) for p in person if poi_scores[poi_id][p]["rec"]]
+            
+            if person_f1:
+                avg_scores_data.append({
+                    "POI名": poi_name_list[poi_id],
+                    "F1 Score": round(np.mean(person_f1), 3),
+                    "Temporal IoU": round(np.mean(person_iou), 3),
+                    "Precision": round(np.mean(person_prec), 3),
+                    "Recall": round(np.mean(person_rec), 3),
+                    "参加者数": len(person_f1)
+                })
+        
+        if avg_scores_data:
+            df_avg = pd.DataFrame(avg_scores_data)
+            st.dataframe(df_avg, width='stretch')
+            
+            fig = px.bar(
+                df_avg, 
+                x="POI名", 
+                y=["F1 Score", "Temporal IoU"], 
+                barmode="group", 
+                title="POI別 全員平均スコア比較",
+                height=400
+            )
+            st.plotly_chart(fig, width='stretch', key="avg_score_bar_chart")
+            
+        path_list = []
+        path_color_list = []
+        heading_line_list = []
+        lat_list, lon_list, color_list = [], [], []
+        geofence_inside_outside_mask = []
+
+    else:
+        location = gps_data["location"]
+        lat_list, lon_list, _, _, _, time_list, path_not_color_list = ds.locations_storage(location, selected_mode)
+        heading = heading_data["direction"]
+        _, division_heading_list, poi_id_list = ds.headings_storage(heading, time_list)
+        direction_difference_list, _ = ds.difference_direction_between_user_and_poi(path_not_color_list, division_heading_list, poi_id_list, poi_lat_list, poi_lon_list, "list")
+
+        lat_iter = iter(lat_list)
+        lon_iter = iter(lon_list)
+        division_lat_list = [[next(lat_iter) for _ in sub_list] for sub_list in division_heading_list]
+        division_lon_list = [[next(lon_iter) for _ in sub_list] for sub_list in division_heading_list]
+        _, view_lat_list, view_lon_list = ds.extend_line(division_lat_list, division_lon_list, division_heading_list, poi_id_list)
+
+        lat_list = []
+        lon_list = []
+
+        not_filtered_heading_list = []
+        not_filtered_lat_list = []
+        not_filtered_lon_list = []
+        filtered_poi_list = []
+        geofence_inside_outside_mask = []
+
+        for inner_lat_list, inner_lon_list, inner_heading_list, poi_id in zip(division_lat_list, division_lon_list, division_heading_list, poi_id_list):
+            if poi_id < 6:
+                center_lat, center_lon = poi_lat_list[poi_id], poi_lon_list[poi_id]
+                if selected_radius_setting == "一律":
+                    radius = all_radius
+                elif selected_radius_setting == "個別":
+                    radius = input_radius[poi_id]
+
+                results = []
+                not_filtered_inner_heading_list = []
+                not_filtered_inner_lat_list = []
+                not_filtered_inner_lon_list = []
+
+                for lon, lat, heading in zip(inner_lon_list, inner_lat_list, inner_heading_list):
+                    is_inside = calc.geofence_inside_outside_determination(center_lat, center_lon, radius, lat, lon)
+                    results.append(is_inside)
+                    
+                    lat_list.append(lat)
+                    lon_list.append(lon)   
+                    not_filtered_inner_heading_list.append(heading) 
+                    not_filtered_inner_lat_list.append(lat)
+                    not_filtered_inner_lon_list.append(lon)  
+                    
+                geofence_inside_outside_mask.append(results)
+                not_filtered_heading_list.append(not_filtered_inner_heading_list)
+                not_filtered_lat_list.append(not_filtered_inner_lat_list)
+                not_filtered_lon_list.append(not_filtered_inner_lon_list)
+                filtered_poi_list.append(poi_id)
+        
+        color_list = ds.color_change_by_geofence(geofence_inside_outside_mask)
+
+        not_filtered_direction_difference = []
+        for lat, lon, heading, poi_id in zip(not_filtered_lat_list, not_filtered_lon_list, not_filtered_heading_list, filtered_poi_list):
+            poi_dir = ds.direction_user_to_poi(lat, lon, poi_lat_list[poi_id], poi_lon_list[poi_id])
+            difference = calc.angle_difference_calc(heading, poi_dir)
+            not_filtered_direction_difference.append(difference)
+        
+        filtered_direction_difference = [
+            [
+                {"value": val, "status": "inside" if is_inside else "outside"}
+                for val, is_inside in zip(sub_data, sub_mask)
+            ]
+            for sub_data, sub_mask in zip(not_filtered_direction_difference, geofence_inside_outside_mask)
         ]
-        for sub_data, sub_mask in zip(not_filtered_direction_difference, geofence_inside_outside_mask)
-    ]
 
-    # 角度差のリストにディスプレイ表示の判定結果を付与
-    double_filtered_direction_difference = [
-        [
-            {
-                "value": d["value"], 
-                "status": (
-                    d["status"], 
-                    "flame_in" if abs(d["value"]) <= float(selected_threshold) else "flame_out"
-                )
-            }
-            for d in sub_list
+        double_filtered_direction_difference = [
+            [
+                {
+                    "value": d["value"], 
+                    "status": (
+                        d["status"], 
+                        "flame_in" if abs(d["value"]) <= float(selected_threshold) else "flame_out"
+                    )
+                }
+                for d in sub_list
+            ]
+            for sub_list in filtered_direction_difference
         ]
-        for sub_list in filtered_direction_difference
-    ]
 
-    # ディスプレイ表示判定
-    with open("data/flame_in_time/" + selected_person + "-flame_in_time.json", "r", encoding="utf-8") as f:
-        timeline_data = json.load(f)
-    flame_in_list = timeline_data["flame_in"]
+        with open("data/flame_in_time/" + selected_person + "-flame_in_time.json", "r", encoding="utf-8") as f:
+            timeline_data = json.load(f)
+        flame_in_list = timeline_data["flame_in"]
 
-    # グラフの作成
-    for i, (nested_list, poi_id) in enumerate(zip(double_filtered_direction_difference, filtered_poi_list)):
-        # タイムライングラフ
-        graph.create_timeline_graph(nested_list, flame_in_list, i, timeline_data, poi_id, poi_name_list)
-        # 折れ線グラフ
-        old_style_list = [
-            poi_id,
-            [d["value"] for d in nested_list]
-        ]
-        graph.create_line_graph(old_style_list, poi_name_list, caption=False)
-        st.markdown("***")
+        for i, (nested_list, poi_id) in enumerate(zip(double_filtered_direction_difference, filtered_poi_list)):
+            current_flame_timeline = flame_in_list[i]["flame_in"]
+            metrics = calc.calculate_timeline_metrics(nested_list, current_flame_timeline)
 
+            print(f"--- [POI:{poi_name_list[poi_id]}] 撮影者:{selected_person} ---")
+            print(f"TP: {metrics.get('TP', 0)} | FP: {metrics.get('FP', 0)} | FN: {metrics.get('FN', 0)}")
+            
+            st.write(f"### {poi_name_list[poi_id]}")
+            col1, col2, col3, col4 = st.columns(4)
+            col1.metric("F1 Score", f"{metrics['F1_Score']:.3f}")
+            col2.metric("Temporal IoU", f"{metrics['Temporal_IoU']:.3f}")
+            col3.metric("Precision", f"{metrics['Precision']:.3f}")
+            col4.metric("Recall", f"{metrics['Recall']:.3f}")
+            
+            graph.create_timeline_graph(nested_list, flame_in_list, i, timeline_data, poi_id, poi_name_list)
+            
+            old_style_list = [
+                poi_id,
+                [d["value"] for d in nested_list]
+            ]
+            graph.create_line_graph(old_style_list, poi_name_list, caption=False, unique_key=f"iou_mode_line_{poi_id}_{i}")
+            st.markdown("***")
 
-    path_list = []
-    path_color_list = []
-    heading_line_list = list(chain.from_iterable(filtered_direction_difference))
+        path_list = []
+        path_color_list = []
+        heading_line_list = list(chain.from_iterable(filtered_direction_difference))
             
 
 
@@ -357,9 +453,9 @@ if selected_mode == "撮影軌跡":
     if selected_attention_poi != "全て":
         for i, difference in enumerate(direction_difference_list):
             if selected_attention_poi == "POI ID" and target_id == difference[0]:
-                graph.create_line_graph(difference, poi_name_list)
+                graph.create_line_graph(difference, poi_name_list, unique_key=f"trace_mode_line_{i}")
             elif selected_attention_poi == "撮影順" and order_list[i] == target_id:
-                graph.create_line_graph(difference, poi_name_list)
+                graph.create_line_graph(difference, poi_name_list, unique_key=f"trace_mode_line_{i}")
                 break
 
     # 描画するポイントの上書き
@@ -547,7 +643,12 @@ elif selected_mode in ["全体軌跡", "撮影軌跡", "Temporal IoU"]:
     elif selected_mode == "Temporal IoU":
         lat_mean = np.mean(lat_list)
         lon_mean = np.mean(lon_list)
-        bounds = [min(lat_list), min(lon_list), max(lat_list), max(lon_list)]
+
+        if lat_list and lon_list:
+            bounds = [min(lat_list), min(lon_list), max(lat_list), max(lon_list)]
+        else:
+            bounds = [39.7, 140.0, 39.8, 140.1]
+
         zoom = calc.calculate_zoom(bounds)
         view_state = pdk.ViewState(latitude=lat_mean, longitude=lon_mean, zoom=zoom)
     

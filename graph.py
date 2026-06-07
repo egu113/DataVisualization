@@ -26,12 +26,11 @@ def create_multiple_lines_graph(direction_difference_dict, poi_name_list):
             showlegend=True,
             legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
         )
-        st.plotly_chart(fig, width="stretch")
-
+        st.plotly_chart(fig, width='stretch', key=f"multi_line_{key}")
 
 
 # 折れ線グラフの作成
-def create_line_graph(list, poi_name_list, caption=True):
+def create_line_graph(list, poi_name_list, caption=True, unique_key=None):
     fig = go.Figure()
     if caption:
         st.caption(poi_name_list[list[0]])
@@ -59,12 +58,15 @@ def create_line_graph(list, poi_name_list, caption=True):
         showlegend=True,
         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
     )
-    st.plotly_chart(fig, width="stretch")
+    chart_key = unique_key if unique_key else f"line_{list[0]}"
+    st.plotly_chart(fig, width='stretch', key=chart_key)
 
 
 
 # タイムライングラフの作成
 def create_timeline_graph(data_list, flame_in_list, i, timeline_data, poi_id, poi_name_list):
+    pprint.pprint(data_list)
+
     df_graph = pd.DataFrame(data_list)
     st.caption(f"{poi_name_list[poi_id]} データ数: {len(data_list)}")
 
@@ -155,7 +157,7 @@ def create_timeline_graph(data_list, flame_in_list, i, timeline_data, poi_id, po
         paper_bgcolor='rgba(0,0,0,0)'
     )
 
-    st.plotly_chart(fig, width="stretch")
+    st.plotly_chart(fig, width='stretch', key=f"timeline_{poi_id}_{i}")
 
 
 
